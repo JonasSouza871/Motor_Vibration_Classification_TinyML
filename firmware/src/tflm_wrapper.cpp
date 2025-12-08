@@ -122,6 +122,11 @@ int tflm_infer(const float in_features[6], float out_scores[4]) {
         normalized[i] = (in_features[i] - scaler_mean[i]) / scaler_scale[i];
     }
 
+    // Imprime os valores normalizados para depuração
+    MicroPrintf("Norm -> Acc(%.2f, %.2f, %.2f) Gyr(%.2f, %.2f, %.2f)\n", 
+               normalized[0], normalized[1], normalized[2], 
+               normalized[3], normalized[4], normalized[5]);
+
     // Copia os 6 atributos normalizados para o tensor de input
     for (int i = 0; i < 6; i++) {
         input_tensor->data.f[i] = normalized[i];

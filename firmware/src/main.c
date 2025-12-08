@@ -4,112 +4,142 @@
 #include "hardware/i2c.h"
 #include "mpu6050.h" 
 #include "ssd1306.h"
+#include "tflm_wrapper.h"
+#include "scaler_params.h"
 
-// --- CONFIGURAÇÕES DE HARDWARE ---
+// --- HARDWARE SETTINGS ---
 
-// Pinos do I²C para o sensor MPU6050
-#define I2C_SENSOR_PORTA i2c0
+// I2C pins for MPU6050 sensor
+#define I2C_SENSOR_PORT i2c0
 #define I2C_SENSOR_SDA 0
 #define I2C_SENSOR_SCL 1
 
-// Pinos do I²C para o display OLED
-#define I2C_DISPLAY_PORTA i2c1
+// I2C pins for OLED display
+#define I2C_DISPLAY_PORT i2c1
 #define I2C_DISPLAY_SDA 14
 #define I2C_DISPLAY_SCL 15
-#define ENDERECO_OLED 0x3C
+#define OLED_ADDR 0x3C
 
-// Configuração de atualização
-#define TEMPO_ATUALIZACAO_MS 200 // Atualiza a tela a cada 200ms
+// Update configuration
+#define UPDATE_TIME_MS 1000 // Update screen every 1s for easier debugging
 
-// --- VARIÁVEIS GLOBAIS ---
+// --- GLOBAL VARIABLES ---
 
-static ssd1306_t display_oled;
-static mpu6050_data_t dados_sensor;
+static ssd1306_t oled_display;
+static mpu6050_data_t sensor_data;
+static int predicted_level = -1; // -1 indicates no prediction yet
 
-// --- FUNÇÕES DO SISTEMA ---
+// --- SYSTEM FUNCTIONS ---
 
-// Inicializa os barramentos I2C e os dispositivos
-void configurar_hardware(void) {
-    // 1. Configura I2C do MPU6050 (400kHz)
-    i2c_init(I2C_SENSOR_PORTA, 400 * 1000);
+// Find the index of the maximum value in a float array
+int argmax(const float* array, int size) {
+    if (size <= 0) return -1;
+    int max_index = 0;
+    for (int i = 1; i < size; ++i) {
+        if (array[i] > array[max_index]) {
+            max_index = i;
+        }
+    }
+    return max_index;
+}
+
+// Initialize I2C buses and devices
+void setup_hardware(void) {
+    // 1. Configure MPU6050 I2C (400kHz)
+    i2c_init(I2C_SENSOR_PORT, 400 * 1000);
     gpio_set_function(I2C_SENSOR_SDA, GPIO_FUNC_I2C);
     gpio_set_function(I2C_SENSOR_SCL, GPIO_FUNC_I2C);
     gpio_pull_up(I2C_SENSOR_SDA);
     gpio_pull_up(I2C_SENSOR_SCL);
+    mpu6050_init(I2C_SENSOR_PORT);
 
-    // Inicializa o MPU6050
-    mpu6050_init(I2C_SENSOR_PORTA);
-
-    // 2. Configura I2C do Display OLED (400kHz)
-    i2c_init(I2C_DISPLAY_PORTA, 400 * 1000);
+    // 2. Configure OLED Display I2C (400kHz)
+    i2c_init(I2C_DISPLAY_PORT, 400 * 1000);
     gpio_set_function(I2C_DISPLAY_SDA, GPIO_FUNC_I2C);
     gpio_set_function(I2C_DISPLAY_SCL, GPIO_FUNC_I2C);
     gpio_pull_up(I2C_DISPLAY_SDA);
     gpio_pull_up(I2C_DISPLAY_SCL);
-
-    // Inicializa o Display
-    ssd1306_init(&display_oled, 128, 64, false, ENDERECO_OLED, I2C_DISPLAY_PORTA);
-    ssd1306_config(&display_oled);
+    ssd1306_init(&oled_display, 128, 64, false, OLED_ADDR, I2C_DISPLAY_PORT);
+    ssd1306_config(&oled_display);
 }
 
-// Função para exibir os dados na tela OLED
-void atualizar_display(void) {
-    // Limpa o buffer da tela
-    ssd1306_fill(&display_oled, false);
+// Function to display data on the OLED screen
+void update_display(void) {
+    char line[32];
+    
+    ssd1306_fill(&oled_display, false);
 
-    // Título
-    ssd1306_draw_string(&display_oled, "MPU6050 DATA", 20, 0, false);
-    ssd1306_hline(&display_oled, 0, 127, 10, true);
+    // Title
+    ssd1306_draw_string(&oled_display, "MOTOR LEVEL", 28, 5, false);
+    ssd1306_hline(&oled_display, 0, 127, 18, true);
 
-    char linha[32];
-    int y = 14; // Posição vertical inicial
-
-    // Exibe Aceleração (X, Y, Z)
-    snprintf(linha, sizeof(linha), "Acc X: %.2f", dados_sensor.accel_x);
-    ssd1306_draw_string(&display_oled, linha, 0, y, false);
-    y += 8;
-
-    snprintf(linha, sizeof(linha), "Acc Y: %.2f", dados_sensor.accel_y);
-    ssd1306_draw_string(&display_oled, linha, 0, y, false);
-    y += 8;
-
-    snprintf(linha, sizeof(linha), "Acc Z: %.2f", dados_sensor.accel_z);
-    ssd1306_draw_string(&display_oled, linha, 0, y, false);
-    y += 8; // Espaço extra
-
-    // Exibe Giroscópio (X, Y, Z)
-    snprintf(linha, sizeof(linha), "Gyr X: %.2f", dados_sensor.gyro_x);
-    ssd1306_draw_string(&display_oled, linha, 0, y, false);
-    y += 8;
-
-    snprintf(linha, sizeof(linha), "Gyr Y: %.2f", dados_sensor.gyro_y);
-    ssd1306_draw_string(&display_oled, linha, 0, y, false);
-    y += 8;
-
-    snprintf(linha, sizeof(linha), "Gyr Z: %.2f", dados_sensor.gyro_z);
-    ssd1306_draw_string(&display_oled, linha, 0, y, false);
-
-    // Envia os dados para o display físico
-    ssd1306_send_data(&display_oled);
+    // Display predicted level
+    if (predicted_level != -1) {
+        snprintf(line, sizeof(line), "Nivel Previsto: %d", predicted_level);
+        ssd1306_draw_string(&oled_display, line, 10, 35, false);
+    } else {
+        ssd1306_draw_string(&oled_display, "Aguardando...", 10, 35, false);
+    }
+    
+    ssd1306_send_data(&oled_display);
 }
 
 // --- MAIN ---
 
 int main(void) {
     stdio_init_all();
+    
+    // Brief pause to allow serial monitor to connect
+    sleep_ms(2000);
+    printf("--- System Initializing ---\n");
 
-    // Configura I2C, MPU e Display
-    configurar_hardware();
+    // Configure I2C, MPU, and Display
+    setup_hardware();
 
-    // Loop principal
+    // Initialize the TinyML model
+    if (tflm_init_model() != 0) {
+        printf("Failed to initialize model.\n");
+        ssd1306_draw_string(&oled_display, "Model Init Failed", 0, 0, false);
+        ssd1306_send_data(&oled_display);
+        while(1);
+    }
+
+    printf("--- Starting Inference Loop ---\n");
+
+    // Main loop
     while (1) {
-        // Lê os dados brutos do sensor
-        mpu6050_read_data(&dados_sensor);
+        // Read raw sensor data
+        mpu6050_read_data(&sensor_data);
 
-        // Atualiza a interface gráfica
-        atualizar_display();
+        // Prepare features for the model (raw data)
+        float in_features[6] = {
+            sensor_data.accel_x,
+            sensor_data.accel_y,
+            sensor_data.accel_z,
+            sensor_data.gyro_x,
+            sensor_data.gyro_y,
+            sensor_data.gyro_z
+        };
 
-        // Aguarda antes da próxima leitura para não piscar demais o display
-        sleep_ms(TEMPO_ATUALIZACAO_MS);
+        printf("Raw -> Acc(%.2f, %.2f, %.2f) Gyr(%.2f, %.2f, %.2f)\n", 
+               in_features[0], in_features[1], in_features[2], 
+               in_features[3], in_features[4], in_features[5]);
+
+        // Run inference (normalization is handled inside tflm_infer)
+        float out_scores[4];
+        tflm_infer(in_features, out_scores);
+
+        printf("Scores -> L0: %.3f, L1: %.3f, L2: %.3f, L3: %.3f\n",
+               out_scores[0], out_scores[1], out_scores[2], out_scores[3]);
+
+        // Get the predicted level
+        predicted_level = argmax(out_scores, 4);
+        printf("Prediction: %d\n\n", predicted_level);
+
+        // Update the display
+        update_display();
+        
+        // Wait before the next reading
+        sleep_ms(UPDATE_TIME_MS);
     }
 }
