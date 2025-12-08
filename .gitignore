@@ -15,3 +15,6 @@ pico-sdk/
 .pico-sdk/
 pico_sdk_import.cmake
 
+# TensorFlow Lite Micro
+pico-tflmicro/
+

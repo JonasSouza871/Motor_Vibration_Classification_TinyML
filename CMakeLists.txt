@@ -21,6 +21,15 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(PICO_BOARD pico_w CACHE STRING "Board type")
 
 include(pico_sdk_import.cmake)
+
+# Incluir pico-tflmicro antes do project()
+# Clone com: git clone https://github.com/raspberrypi/pico-tflmicro.git
+if(EXISTS ${CMAKE_CURRENT_LIST_DIR}/pico-tflmicro/CMakeLists.txt)
+    include(pico-tflmicro/pico_tflmicro_import.cmake)
+else()
+    message(WARNING "pico-tflmicro não encontrado. Clone com: git clone https://github.com/raspberrypi/pico-tflmicro.git")
+endif()
+
 project(Motor_Classification_TinyML C CXX ASM)
 pico_sdk_init()
 
@@ -29,6 +38,7 @@ add_executable(${PROJECT_NAME}
     firmware/src/main.c
     firmware/src/mpu6050.c
     firmware/src/ssd1306.c
+    firmware/src/tflm_wrapper.cpp
 )
 
 # Diretórios de inclusão
@@ -40,6 +50,7 @@ target_include_directories(${PROJECT_NAME} PRIVATE
 target_link_libraries(${PROJECT_NAME} PRIVATE
     pico_stdlib
     hardware_i2c
+    pico-tflmicro
 )
 
 # Configuração de saída
