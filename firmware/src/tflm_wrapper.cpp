@@ -6,8 +6,8 @@
 // -------------------------------------------------------------------
 // Biblioteca disponível em: git clone https://github.com/raspberrypi/pico-tflmicro.git
 #include "tensorflow/lite/micro/micro_interpreter.h"
+#include "tensorflow/lite/micro/micro_log.h"
 #include "tensorflow/lite/micro/micro_mutable_op_resolver.h"
-#include "tensorflow/lite/micro/tflite_bridge/micro_error_reporter.h"
 #include "tensorflow/lite/schema/schema_generated.h"
 
 // Modelo convertido em array C (gerado pelo notebook Python)
@@ -27,10 +27,6 @@ namespace {
 // Tamanho da arena de tensores (ajuste se der erro de memória)
 constexpr int kTensorArenaSize = 10 * 1024;  // 10KB para o modelo de motor
 alignas(16) static uint8_t tensor_arena[kTensorArenaSize];
-
-// Logger de erros
-static tflite::MicroErrorReporter micro_error_reporter;
-static tflite::ErrorReporter* error_reporter = &micro_error_reporter;
 
 // Modelo e intérprete
 static const tflite::Model* model = nullptr;
@@ -52,33 +48,38 @@ int tflm_init_model(void) {
     // Aponta para o modelo dentro do array motor_model (gerado pelo notebook)
     model = tflite::GetModel(motor_model);
     if (model == nullptr) {
-        printf("Erro: modelo nulo.\n");
+        MicroPrintf("Erro: modelo nulo.");
         return -1;
     }
 
     // Registrar apenas as operações usadas pelo MLP de motor
     // (FullyConnected + ReLU + Softmax + Reshape)
-    resolver.AddFullyConnected();
-    resolver.AddRelu();
-    resolver.AddSoftmax();
-    resolver.AddReshape();
+    if (resolver.AddFullyConnected() != kTfLiteOk) {
+        return -1;
+    }
+    if (resolver.AddRelu() != kTfLiteOk) {
+        return -1;
+    }
+    if (resolver.AddSoftmax() != kTfLiteOk) {
+        return -1;
+    }
+    if (resolver.AddReshape() != kTfLiteOk) {
+        return -1;
+    }
 
     // Cria o intérprete estático usando a arena
     static tflite::MicroInterpreter static_interpreter(
         model,
         resolver,
         tensor_arena,
-        kTensorArenaSize,
-        nullptr,  // resource variables
-        nullptr,  // profiler
-        false     // use_recording_allocator
+        kTensorArenaSize
     );
 
     interpreter = &static_interpreter;
 
     // Aloca os tensores
     if (interpreter->AllocateTensors() != kTfLiteOk) {
-        printf("AllocateTensors falhou.\n");
+        MicroPrintf("AllocateTensors falhou.");
         return -2;
     }
 
@@ -86,22 +87,22 @@ int tflm_init_model(void) {
     output_tensor = interpreter->output(0);
 
     if (!input_tensor || !output_tensor) {
-        printf("Erro ao obter tensores de entrada/saida.\n");
+        MicroPrintf("Erro ao obter tensores de entrada/saida.");
         return -3;
     }
 
-    printf("TFLM inicializado com sucesso.\n");
-    printf("Dimensoes input: ");
+    MicroPrintf("TFLM inicializado com sucesso.");
+    MicroPrintf("Dimensoes input: ");
     for (int i = 0; i < input_tensor->dims->size; i++) {
-        printf("%d ", input_tensor->dims->data[i]);
+        MicroPrintf("%d ", input_tensor->dims->data[i]);
     }
-    printf("\n");
+    MicroPrintf("\n");
 
-    printf("Dimensoes output: ");
+    MicroPrintf("Dimensoes output: ");
     for (int i = 0; i < output_tensor->dims->size; i++) {
-        printf("%d ", output_tensor->dims->data[i]);
+        MicroPrintf("%d ", output_tensor->dims->data[i]);
     }
-    printf("\n");
+    MicroPrintf("\n");
 
     return 0;
 }
@@ -128,7 +129,7 @@ int tflm_infer(const float in_features[6], float out_scores[4]) {
 
     // Executa o modelo
     if (interpreter->Invoke() != kTfLiteOk) {
-        printf("Invoke falhou.\n");
+        MicroPrintf("Invoke falhou.");
         return -2;
     }
 

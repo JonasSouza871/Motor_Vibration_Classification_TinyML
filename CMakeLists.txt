@@ -16,22 +16,22 @@ cmake_minimum_required(VERSION 3.13)
 
 # Configuração básica do projeto
 set(CMAKE_C_STANDARD 11)
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(PICO_BOARD pico_w CACHE STRING "Board type")
 
 include(pico_sdk_import.cmake)
 
-# Incluir pico-tflmicro antes do project()
-# Clone com: git clone https://github.com/raspberrypi/pico-tflmicro.git
-if(EXISTS ${CMAKE_CURRENT_LIST_DIR}/pico-tflmicro/CMakeLists.txt)
-    include(pico-tflmicro/pico_tflmicro_import.cmake)
-else()
-    message(WARNING "pico-tflmicro não encontrado. Clone com: git clone https://github.com/raspberrypi/pico-tflmicro.git")
-endif()
-
 project(Motor_Classification_TinyML C CXX ASM)
 pico_sdk_init()
+
+# Adicionar pico-tflmicro como subdiretório
+# Clone com: git clone --recurse-submodules https://github.com/raspberrypi/pico-tflmicro.git
+if(EXISTS ${CMAKE_CURRENT_LIST_DIR}/pico-tflmicro/CMakeLists.txt)
+    add_subdirectory(pico-tflmicro)
+else()
+    message(FATAL_ERROR "pico-tflmicro não encontrado. Clone com: git clone --recurse-submodules https://github.com/raspberrypi/pico-tflmicro.git")
+endif()
 
 # Criação do executável com arquivos organizados
 add_executable(${PROJECT_NAME}
@@ -44,6 +44,12 @@ add_executable(${PROJECT_NAME}
 # Diretórios de inclusão
 target_include_directories(${PROJECT_NAME} PRIVATE
     firmware/libs
+)
+
+# Propriedades do C++ para TensorFlow Lite Micro
+set_target_properties(${PROJECT_NAME}
+    PROPERTIES
+    COMPILE_FLAGS "-fno-rtti -fno-exceptions -fno-threadsafe-statics"
 )
 
 # Bibliotecas necessárias
