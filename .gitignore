@@ -13,4 +13,5 @@ build/
 # Pico SDK
 pico-sdk/
 .pico-sdk/
+pico_sdk_import.cmake
 
