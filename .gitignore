@@ -1,6 +1,16 @@
-# Jupyter Notebook
+
 .ipynb_checkpoints
 *.ipynb_checkpoints/
-# IDEs
 .vscode/
+build/
+*.elf
+*.bin
+*.hex
+*.uf2
+*.map
+*.lst
+
+# Pico SDK
+pico-sdk/
+.pico-sdk/
 
