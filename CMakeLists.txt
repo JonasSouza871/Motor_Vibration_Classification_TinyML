@@ -39,11 +39,13 @@ add_executable(${PROJECT_NAME}
     firmware/src/mpu6050.c
     firmware/src/ssd1306.c
     firmware/src/tflm_wrapper.cpp
+    firmware/libs/iot/pico_http_server.c
 )
 
 # Diretórios de inclusão
 target_include_directories(${PROJECT_NAME} PRIVATE
     firmware/libs
+    firmware/libs/iot
 )
 
 # Propriedades do C++ para TensorFlow Lite Micro
@@ -57,6 +59,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     pico_stdlib
     hardware_i2c
     pico-tflmicro
+    pico_cyw43_arch_lwip_poll
 )
 
 # Configuração de saída
