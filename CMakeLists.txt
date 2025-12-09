@@ -48,13 +48,13 @@ target_include_directories(${PROJECT_NAME} PRIVATE
     firmware/libs/iot
 )
 
-# Propriedades do C++ para TensorFlow Lite Micro
+#Propriedades do C++ para TensorFlow Lite Micro
 set_target_properties(${PROJECT_NAME}
     PROPERTIES
     COMPILE_FLAGS "-fno-rtti -fno-exceptions -fno-threadsafe-statics"
 )
 
-# Bibliotecas necessárias
+#bibliotecas necessárias
 target_link_libraries(${PROJECT_NAME} PRIVATE
     pico_stdlib
     hardware_i2c
