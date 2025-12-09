@@ -1,144 +1,95 @@
 #include <cstdio>
 #include "pico/stdlib.h"
 
-// -------------------------------------------------------------------
-// TensorFlow Lite Micro (via pico-tflmicro)
-// -------------------------------------------------------------------
-// Biblioteca disponível em: git clone https://github.com/raspberrypi/pico-tflmicro.git
+//bibliotecas do tflite micro
 #include "tensorflow/lite/micro/micro_interpreter.h"
 #include "tensorflow/lite/micro/micro_log.h"
 #include "tensorflow/lite/micro/micro_mutable_op_resolver.h"
 #include "tensorflow/lite/schema/schema_generated.h"
 
-// Modelo convertido em array C (gerado pelo notebook Python)
+//arquivos gerados pelo notebook
 #include "motor_model.h"
+#include "scaler_params.h" 
+#include "tflm_wrapper.h" //header da api
 
-// Parâmetros de normalização (gerado pelo notebook Python)
-#include "scaler_params.h"
-
-// API em C que será chamada pelo main.c
-#include "tflm_wrapper.h"
-
-// -------------------------------------------------------------------
-// Objetos estáticos do TFLM
-// -------------------------------------------------------------------
-namespace {
-
-// Tamanho da arena de tensores (ajuste se der erro de memória)
-constexpr int kTensorArenaSize = 10 * 1024;  // 10KB para o modelo de motor
+//area de memoria pro tflite, se der erro de alloc tem que aumentar aqui
+constexpr int kTensorArenaSize = 10 * 1024; 
 alignas(16) static uint8_t tensor_arena[kTensorArenaSize];
 
-// Modelo e intérprete
 static const tflite::Model* model = nullptr;
-
-// Registrador de operações (MLP com Dropout usa: Dense, ReLU, Softmax, Reshape)
-static tflite::MicroMutableOpResolver<4> resolver;
-
-// Intérprete e tensores de entrada/saída
 static tflite::MicroInterpreter* interpreter = nullptr;
 static TfLiteTensor* input_tensor = nullptr;
 static TfLiteTensor* output_tensor = nullptr;
 
-}  // namespace
+//resolver pra carregar as operacoes usadas no modelo
+//se mudar a arquitetura no python tem que atualizar aqui o numero de ops
+static tflite::MicroMutableOpResolver<4> resolver;
 
-// -------------------------------------------------------------------
-// Inicializa o modelo TFLM
-// -------------------------------------------------------------------
 int tflm_init_model(void) {
-    // Aponta para o modelo dentro do array motor_model (gerado pelo notebook)
+    //carrega o modelo do array de bytes
     model = tflite::GetModel(motor_model);
     if (model == nullptr) {
-        MicroPrintf("Erro: modelo nulo.");
+        MicroPrintf("Erro: model ta nulo");
         return -1;
     }
 
-    // Registrar apenas as operações usadas pelo MLP de motor
-    // (FullyConnected + ReLU + Softmax + Reshape)
-    if (resolver.AddFullyConnected() != kTfLiteOk) {
-        return -1;
-    }
-    if (resolver.AddRelu() != kTfLiteOk) {
-        return -1;
-    }
-    if (resolver.AddSoftmax() != kTfLiteOk) {
-        return -1;
-    }
-    if (resolver.AddReshape() != kTfLiteOk) {
-        return -1;
-    }
+    //registrando ops necessarias (dense, relu, softmax, reshape)
+    resolver.AddFullyConnected();
+    resolver.AddRelu();
+    resolver.AddSoftmax();
+    resolver.AddReshape(); 
 
-    // Cria o intérprete estático usando a arena
+    //instancia o interpretador estatico
     static tflite::MicroInterpreter static_interpreter(
-        model,
-        resolver,
-        tensor_arena,
-        kTensorArenaSize
+        model, resolver, tensor_arena, kTensorArenaSize
     );
-
     interpreter = &static_interpreter;
 
-    // Aloca os tensores
+    //aloca memoria pros tensores
     if (interpreter->AllocateTensors() != kTfLiteOk) {
-        MicroPrintf("AllocateTensors falhou.");
+        MicroPrintf("Erro no AllocateTensors, checar kTensorArenaSize");
         return -2;
     }
 
-    input_tensor  = interpreter->input(0);
+    input_tensor = interpreter->input(0);
     output_tensor = interpreter->output(0);
 
+    //validacao basica
     if (!input_tensor || !output_tensor) {
-        MicroPrintf("Erro ao obter tensores de entrada/saida.");
+        MicroPrintf("Nao conseguiu pegar tensores de in/out");
         return -3;
     }
 
-    MicroPrintf("TFLM inicializado com sucesso.");
-    MicroPrintf("Dimensoes input: ");
-    for (int i = 0; i < input_tensor->dims->size; i++) {
-        MicroPrintf("%d ", input_tensor->dims->data[i]);
-    }
-    MicroPrintf("\n");
-
-    MicroPrintf("Dimensoes output: ");
-    for (int i = 0; i < output_tensor->dims->size; i++) {
-        MicroPrintf("%d ", output_tensor->dims->data[i]);
-    }
-    MicroPrintf("\n");
-
+    MicroPrintf("TFLM iniciado. In dims: %d, Out dims: %d", input_tensor->dims->size, output_tensor->dims->size);
     return 0;
 }
 
-// -------------------------------------------------------------------
-// Executa uma inferência no modelo de classificação de motor
-// -------------------------------------------------------------------
 int tflm_infer(const float in_features[6], float out_scores[4]) {
-    if (!interpreter || !input_tensor || !output_tensor) {
-        return -1;
-    }
+    if (!interpreter) return -1; //seguranca
 
-    // Normalizar os dados usando os parâmetros do StandardScaler
-    // Fórmula: (valor - mean) / scale
     float normalized[6];
+    
+    //aplica a normalizacao (standard scaler) igual foi feito no python
+    //formula: (valor - media) / desvio
     for (int i = 0; i < 6; i++) {
         normalized[i] = (in_features[i] - scaler_mean[i]) / scaler_scale[i];
     }
 
-    // Imprime os valores normalizados para depuração
-    MicroPrintf("Norm -> Acc(%.2f, %.2f, %.2f) Gyr(%.2f, %.2f, %.2f)\n", 
-               normalized[0], normalized[1], normalized[2], 
-               normalized[3], normalized[4], normalized[5]);
+    //debug pra ver se a normalizacao ta batendo
+    //MicroPrintf("Input norm: %.2f %.2f %.2f...", normalized[0], normalized[1], normalized[2]);
 
-    // Copia os 6 atributos normalizados para o tensor de input
+    //copia pro tensor de entrada
     for (int i = 0; i < 6; i++) {
         input_tensor->data.f[i] = normalized[i];
     }
 
-    // Executa o modelo
+    //roda a inferencia
     if (interpreter->Invoke() != kTfLiteOk) {
-        MicroPrintf("Invoke falhou.");
+        MicroPrintf("Erro ao rodar Invoke");
         return -2;
     }
 
-    // Copia as 4 saídas (uma por classe: Level 0, 1, 2, 3)
+    //pega o resultado (probabilidades das 4 classes)
     for (int i = 0; i < 4; i++) {
         out_scores[i] = output_tensor->data.f[i];
     }

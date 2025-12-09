@@ -4,114 +4,91 @@
 #include <stdio.h>
 #include "pico/stdio.h"
 
-// --- Variáveis internas da biblioteca ---
 #define MAX_HANDLERS 10
+
+//globais do server
 static http_request_handler_t handlers[MAX_HANDLERS];
 static int handler_count = 0;
 static const char *homepage_content = NULL;
-static http_content_type_t response_content_type = HTTP_CONTENT_TYPE_HTML;
+static http_content_type_t curr_content_type = HTTP_CONTENT_TYPE_HTML;
 
-// Estrutura para gerenciar o estado da conexão
-struct http_state
-{
-    char response[16384]; // Tamanho do buffer de resposta
+//estado da conexao pra segurar o buffer
+struct http_state {
+    char response[16384]; //bufferzao pra caber o html
     size_t len;
     size_t sent;
 };
 
-// Callback para enviar dados após a escrita
-static err_t http_sent_callback(void *arg, struct tcp_pcb *tpcb, u16_t len)
-{
+//callback quando termina de enviar os dados
+static err_t http_sent_callback(void *arg, struct tcp_pcb *tpcb, u16_t len) {
     struct http_state *hs = (struct http_state *)arg;
     hs->sent += len;
-    if (hs->sent >= hs->len)
-    {
-        tcp_close(tpcb);
-        free(hs);
+    
+    if (hs->sent >= hs->len) {
+        tcp_close(tpcb); //fechou
+        free(hs); //libera memoria do state
     }
     return ERR_OK;
 }
 
-// Roteador de requisições
-static void handle_request(struct http_state *hs, const char *req_line)
-{
+//logica principal pra processar a url
+static void handle_request(struct http_state *hs, const char *req_line) {
     char *path_end = strchr(req_line, ' ');
-    if (path_end == NULL)
-    {
+    if (!path_end) {
         hs->len = snprintf(hs->response, sizeof(hs->response), "HTTP/1.1 400 Bad Request\r\n\r\n");
         return;
     }
+
+    //copia o path pra uma string limpa
     size_t path_len = path_end - req_line;
     char path[path_len + 1];
     strncpy(path, req_line, path_len);
     path[path_len] = '\0';
 
-    if ((strcmp(path, "/") == 0) && homepage_content)
-    {
+    //se for a home e tiver conteudo setado
+    if ((strcmp(path, "/") == 0) && homepage_content) {
         hs->len = snprintf(hs->response, sizeof(hs->response),
-                           "HTTP/1.1 200 OK\r\n"
-                           "Content-Type: text/html\r\n"
-                           "Content-Length: %d\r\n"
-                           "Connection: close\r\n\r\n%s",
-                           (int)strlen(homepage_content), homepage_content);
-
+            "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s",
+            (int)strlen(homepage_content), homepage_content);
         return;
     }
 
-    // Procura por um handler registrado
-    for (int i = 0; i < handler_count; i++)
-    {
-        if (strstr(path, handlers[i].path) && handlers[i].handler)
-        {
+    //varre os handlers registrados
+    for (int i = 0; i < handler_count; i++) {
+        if (strstr(path, handlers[i].path) && handlers[i].handler) {
             const char *content = handlers[i].handler(req_line);
-            const char *content_type_str;
-            switch (response_content_type)
-            {
-            case HTTP_CONTENT_TYPE_JSON:
-                content_type_str = "application/json";
-                break;
-            case HTTP_CONTENT_TYPE_PLAIN:
-                content_type_str = "text/plain";
-                break;
-            case HTTP_CONTENT_TYPE_HTML:
-            default:
-                content_type_str = "text/html";
-                break;
-            }
+            
+            //define o mime type
+            const char *mime = "text/html";
+            if (curr_content_type == HTTP_CONTENT_TYPE_JSON) mime = "application/json";
+            else if (curr_content_type == HTTP_CONTENT_TYPE_PLAIN) mime = "text/plain";
+
             hs->len = snprintf(hs->response, sizeof(hs->response),
-                               "HTTP/1.1 200 OK\r\n"
-                               "Content-Type: %s\r\n"
-                               "Content-Length: %d\r\n"
-                               "Connection: close\r\n\r\n%s",
-                               content_type_str, (int)strlen(content), content);
+                "HTTP/1.1 200 OK\r\nContent-Type: %s\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s",
+                mime, (int)strlen(content), content);
             return;
         }
     }
 
-    // Chegará até aqui se nenhum handler for encontrado
+    //nao achou nada
     hs->len = snprintf(hs->response, sizeof(hs->response), "HTTP/1.1 404 Not Found\r\n\r\n");
 }
 
-// Callback principal de recepção de dados
-static err_t http_recv_callback(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err)
-{
-    if (!p)
-    {
+//chegou dados tcp
+static err_t http_recv_callback(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err) {
+    if (!p) {
         tcp_close(tpcb);
         return ERR_OK;
     }
 
+    //aloca o state pra essa conexao
     struct http_state *hs = (struct http_state *)malloc(sizeof(struct http_state));
     hs->sent = 0;
 
     char *req = (char *)p->payload;
-    if (strstr(req, "GET ") == req)
-    {
-        req += 4; // Avança o ponteiro após "GET "
-        handle_request(hs, req);
-    }
-    else
-    {
+    if (strstr(req, "GET ") == req) {
+        handle_request(hs, req + 4); //pula o "GET "
+    } else {
         hs->len = snprintf(hs->response, sizeof(hs->response), "HTTP/1.1 405 Method Not Allowed\r\n\r\n");
     }
 
@@ -120,129 +97,95 @@ static err_t http_recv_callback(void *arg, struct tcp_pcb *tpcb, struct pbuf *p,
     tcp_write(tpcb, hs->response, hs->len, TCP_WRITE_FLAG_COPY);
     tcp_output(tpcb);
     pbuf_free(p);
+    
     return ERR_OK;
 }
 
-// Callback de nova conexão
-static err_t connection_callback(void *arg, struct tcp_pcb *newpcb, err_t err)
-{
+static err_t connection_callback(void *arg, struct tcp_pcb *newpcb, err_t err) {
     tcp_recv(newpcb, http_recv_callback);
     return ERR_OK;
 }
 
-// Função de inicialização
-int http_server_init(const char *ssid, const char *password)
-{
-    if (cyw43_arch_init())
-    {
-        printf("Falha ao inicializar o Wi-Fi.\n");
+int http_server_init(const char *ssid, const char *password) {
+    if (cyw43_arch_init()) {
+        printf("erro init cyw43\n");
         return -1;
     }
 
     cyw43_arch_enable_sta_mode();
-    printf("Conectando a %s...\n", ssid);
-    if (cyw43_arch_wifi_connect_timeout_ms(ssid, password, CYW43_AUTH_WPA2_AES_PSK, 15000))
-    {
-        printf("Falha na conexão Wi-Fi.\n");
+    printf("Tentando conectar em %s...\n", ssid);
+    
+    if (cyw43_arch_wifi_connect_timeout_ms(ssid, password, CYW43_AUTH_WPA2_AES_PSK, 15000)) {
+        printf("falha wifi connect\n");
         return -1;
     }
-    printf("Conectado! IP: %s\n", ip4addr_ntoa(netif_ip4_addr(netif_default)));
+    printf("Wifi on! IP: %s\n", ip4addr_ntoa(netif_ip4_addr(netif_default)));
 
+    //sobe o tcp na porta 80
     struct tcp_pcb *pcb = tcp_new();
     tcp_bind(pcb, IP_ADDR_ANY, 80);
     pcb = tcp_listen(pcb);
     tcp_accept(pcb, connection_callback);
 
-    printf("Servidor HTTP iniciado na porta 80.\n");
     return 0;
 }
 
-// Implementação das funções de interface
-void http_server_set_homepage(const char *html_content)
-{
+// --- API publica ---
+
+void http_server_set_homepage(const char *html_content) {
     homepage_content = html_content;
 }
 
-void http_server_register_handler(http_request_handler_t handler)
-{
-    if (handler_count < MAX_HANDLERS)
-    {
+void http_server_register_handler(http_request_handler_t handler) {
+    if (handler_count < MAX_HANDLERS) {
         handlers[handler_count++] = handler;
     }
 }
 
-void http_server_set_content_type(http_content_type_t type)
-{
-    response_content_type = type;
+void http_server_set_content_type(http_content_type_t type) {
+    curr_content_type = type;
 }
 
-void http_server_parse_float_param(const char *req, const char *param, float *value)
-{
+//parser simples pra pegar float da url (tipo ?temp=25.5)
+void http_server_parse_float_param(const char *req, const char *param, float *value) {
     char *found = strstr(req, param);
-    if (found)
-    {
-        *value = atof(found + strlen(param));
-    }
+    if (found) *value = atof(found + strlen(param));
 }
 
-char *http_server_read_html_file(const char *filename)
-{
-    FILE *file;
-    long file_size;
-    char *html_content_raw = NULL;
-    char *html_content_minified = NULL;
-    int write_index = 0;
-
-    file = fopen(filename, "r");
-    if (file == NULL)
-    {
-        perror("Erro ao abrir o arquivo");
+//funcao auxiliar pra ler html do fs
+//nota: precisa ter suporte a fs habilitado no cmake
+char *http_server_read_html_file(const char *filename) {
+    FILE *file = fopen(filename, "r");
+    if (!file) {
+        printf("erro abrir arquivo %s\n", filename);
         return NULL;
     }
 
     fseek(file, 0, SEEK_END);
-    file_size = ftell(file);
+    long size = ftell(file);
     fseek(file, 0, SEEK_SET);
 
-    html_content_raw = (char *)malloc(file_size + 1);
-    if (html_content_raw == NULL)
-    {
-        perror("Erro ao alocar memória para o buffer");
+    char *raw = (char *)malloc(size + 1);
+    if (!raw) {
         fclose(file);
         return NULL;
     }
 
-    long bytes_read = fread(html_content_raw, 1, file_size, file);
-    if (bytes_read != file_size)
-    {
-        perror("Erro ao ler o arquivo");
-        free(html_content_raw);
-        fclose(file);
-        return NULL;
-    }
-
-    html_content_raw[file_size] = '\0';
+    fread(raw, 1, size, file);
+    raw[size] = '\0';
     fclose(file);
 
-    html_content_minified = (char *)malloc(file_size + 1);
-    if (html_content_minified == NULL)
-    {
-        perror("Erro ao alocar memória para a string minificada");
-        free(html_content_raw);
-        return NULL;
-    }
-
-    for (int i = 0; i < file_size; i++)
-    {
-        if (html_content_raw[i] != '\n' && html_content_raw[i] != '\r')
-        {
-            html_content_minified[write_index++] = html_content_raw[i];
+    //minificando na mao (tirando quebra de linha)
+    //pra economizar espaco no buffer de envio
+    char *mini = (char *)malloc(size + 1);
+    int idx = 0;
+    for (int i = 0; i < size; i++) {
+        if (raw[i] != '\n' && raw[i] != '\r') {
+            mini[idx++] = raw[i];
         }
     }
+    mini[idx] = '\0';
+    free(raw);
 
-    html_content_minified[write_index] = '\0';
-
-    free(html_content_raw);
-
-    return html_content_minified;
+    return mini;
 }
